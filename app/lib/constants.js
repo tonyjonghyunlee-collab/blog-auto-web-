@@ -39,6 +39,7 @@ export const AI_MODELS = {
       { id: "gemini-2.5-pro", label: "2.5 Pro", price: "$1.25/$10", desc: "코딩·추론" },
       { id: "gemini-3-flash-preview", label: "3 Flash ⚡", price: "$0.5/$3", desc: "프론티어·빠름" },
       { id: "gemini-3-pro-preview", label: "3 Pro ★", price: "$2/$12", desc: "최고 추론" },
+      { id: "gemini-3.1-flash-preview", label: "3.1 Flash ⚡★", price: "$0.5/$3", desc: "최신·빠름·추천" },
       { id: "gemini-3.1-pro-preview", label: "3.1 Pro ★★", price: "$2/$12", desc: "최신 에이전트" },
     ],
   },
@@ -120,9 +121,9 @@ export const COMMON_REPLACE = {
 };
 
 export const DEFAULT_STEP_AI = {
-  write: { provider: "gemini", model: "gemini-3-flash-preview" },
-  forbidden: { provider: "gemini", model: "gemini-3-flash-preview" },
-  images: { provider: "gemini", model: "gemini-3-flash-preview" },
+  write: { provider: "gemini", model: "gemini-3.1-flash-preview" },
+  forbidden: { provider: "gemini", model: "gemini-3.1-flash-preview" },
+  images: { provider: "gemini", model: "gemini-3.1-flash-preview" },
 };
 
 export const card = { background: "#FFFFFF", borderRadius: 12, padding: 16, border: "1px solid rgba(0,0,0,0.08)", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" };

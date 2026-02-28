@@ -86,9 +86,9 @@ export default function App() {
     (async () => {
       // Reset old settings if migrating from artifact to web
       const ver = await load("nv-version", 0);
-      if (ver < 3) {
-        await save("nv-stepai", null); // force new defaults
-        await save("nv-version", 3);
+      if (ver < 4) {
+        await save("nv-stepai", null); // force new defaults (3.1 Flash)
+        await save("nv-version", 4);
       }
       setForbidden(await load("nv-fw", []));
       setContact(await load("nv-ct", ""));
