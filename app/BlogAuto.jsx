@@ -1,269 +1,32 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { STEPS, AI_MODELS, WRITE_STYLES, PERSONAS, HOOKS, IMG_STYLES, GEMINI_IMG_MODELS, PHRASE_REPLACE, COMMON_REPLACE, DEFAULT_STEP_AI, card, inp, lbl, cc, btn1, btn2, btnS } from "./lib/constants";
+import { callAI, generateGeminiImage, callNaverKeywordAPI, getProviderStatus } from "./lib/api";
+import { load, save } from "./lib/storage";
+import { scoreKw, grade, parseBulk, parseTitles, stripTitleSection, stripAiAnalysis, parseFwPaste, copyText } from "./lib/parsers";
+import { buildKeywordPrompt, buildWritePrompt, buildImagePrompt, buildRegenPrompt, buildFwRewritePrompt, buildSmoothPrompt, buildRetryFwPrompt } from "./lib/prompts";
+import { useIsMobile } from "./lib/hooks";
 
 // ── Environment Detection ──
 // Artifact: Claude API proxied (no key needed), external APIs blocked
 // Web: All APIs need keys, but all work (no CORS issues)
 
-// ── Config ──
-const STEPS = [
-  { id: "keywords", label: "키워드", icon: "🔍" },
-  { id: "write", label: "글 작성", icon: "✍️" },
-  { id: "forbidden", label: "금칙어", icon: "🚫" },
-  { id: "images", label: "이미지", icon: "🎨" },
-];
-
-const AI_MODELS = {
-  claude: {
-    name: "Claude", color: "#a78bfa", icon: "🟣", needsKey: true,
-    models: [
-      { id: "claude-sonnet-4-6", label: "Sonnet 4.6 ★", price: "$3/$15", desc: "최신·Opus급 성능", free: true },
-      { id: "claude-opus-4-6", label: "Opus 4.6", price: "$5/$25", desc: "최강 플래그십", free: true },
-      { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", price: "$3/$15", desc: "코딩 특화", free: true },
-      { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", price: "$1/$5", desc: "빠르고 저렴", free: true },
-      { id: "claude-sonnet-4-20250514", label: "Sonnet 4", price: "$3/$15", desc: "구버전·안정", free: true },
-    ],
-  },
-  gpt: {
-    name: "GPT", color: "#74aa9c", icon: "🟢", needsKey: true,
-    models: [
-      { id: "gpt-5.2", label: "5.2 ★", price: "$1.75/$14", desc: "최신 플래그십" },
-      { id: "gpt-5", label: "5", price: "$1.25/$10", desc: "코딩·에이전트" },
-      { id: "gpt-5-mini", label: "5 Mini", price: "$0.25/$2", desc: "빠르고 저렴" },
-      { id: "gpt-5-nano", label: "5 Nano", price: "$0.05/$0.4", desc: "초저가·분류" },
-      { id: "gpt-4.1", label: "4.1", price: "$2/$8", desc: "범용·안정" },
-      { id: "gpt-4.1-mini", label: "4.1 Mini", price: "$0.4/$1.6", desc: "소형·가성비" },
-      { id: "gpt-4.1-nano", label: "4.1 Nano", price: "$0.1/$0.4", desc: "초소형" },
-      { id: "gpt-4o-mini", label: "4o Mini", price: "$0.15/$0.6", desc: "구버전·경량" },
-      { id: "gpt-4o", label: "4o", price: "$2.5/$10", desc: "구버전·멀티모달" },
-    ],
-  },
-  gemini: {
-    name: "Gemini", color: "#4285f4", icon: "🔵", needsKey: true,
-    models: [
-      { id: "gemini-2.0-flash", label: "2.0 Flash", price: "$0.1/$0.4", desc: "가성비·안정" },
-      { id: "gemini-2.5-flash-lite", label: "2.5 Flash Lite", price: "$0.1/$0.4", desc: "초저가" },
-      { id: "gemini-2.5-flash", label: "2.5 Flash", price: "$0.15/$0.6", desc: "사고력+빠름" },
-      { id: "gemini-2.5-pro", label: "2.5 Pro", price: "$1.25/$10", desc: "코딩·추론" },
-      { id: "gemini-3-flash-preview", label: "3 Flash ⚡", price: "$0.5/$3", desc: "프론티어·빠름" },
-      { id: "gemini-3-pro-preview", label: "3 Pro ★", price: "$2/$12", desc: "최고 추론" },
-      { id: "gemini-3.1-pro-preview", label: "3.1 Pro ★★", price: "$2/$12", desc: "최신 에이전트" },
-    ],
-  },
-};
-
-const WRITE_STYLES = [
-  { id: "clickbait", label: "🎣 낚시형", desc: "호기심 자극, 궁금증 유발, 클릭을 부르는 제목과 도입", color: "#f59e0b",
-    prompt: `- 제목은 반드시 클릭하고 싶게 만들어야 합니다. "이것 모르면 손해", "아직도 이렇게 하세요?", "~한 사람만 알고 있는" 같은 호기심 유발 패턴 사용
-- 도입부에서 독자가 "이건 나한테 해당되는 이야기다"라고 느끼게 만드세요
-- 핵심 정보를 바로 주지 말고 궁금증을 쌓아가며 전개하세요
-- 중간중간 "그런데 여기서 중요한 건요..." 같은 전환으로 계속 읽게 유도` },
-  { id: "story", label: "📖 스토리텔링", desc: "실제 경험담처럼, 감정 공감, 자연스러운 흐름", color: "#8b5cf6",
-    prompt: `- "저도 처음에는 몰랐어요" 같은 1인칭 경험담 스타일로 시작
-- 실제 상담 사례나 주변 이야기를 활용 (가상이어도 현실적으로)
-- 감정의 흐름: 걱정 → 알아봄 → 해결 → 안심 구조
-- 독자가 자기 이야기처럼 느끼게 공감 포인트를 잡아주세요` },
-  { id: "info", label: "📊 정보전달", desc: "체계적 분석, 객관적 비교, 전문가 톤", color: "#3b82f6",
-    prompt: `- 객관적이고 신뢰감 있는 전문가 톤
-- 구체적인 수치, 비교표, 조건 등을 활용
-- "첫째, 둘째" 같은 구조적 전개
-- 독자가 "이 글 하나로 다 이해했다"고 느끼게 정리` },
-  { id: "compare", label: "⚖️ 비교분석", desc: "A vs B 구조, 장단점, 어떤 게 나에게 맞는지", color: "#ec4899",
-    prompt: `- "A와 B, 뭐가 다를까?" 같은 비교 구조로 시작
-- 각각의 장점과 단점을 공정하게 비교
-- "이런 분은 A가 좋고, 저런 분은 B가 좋습니다" 결론
-- 표나 정리 형식으로 한눈에 비교할 수 있게` },
-  { id: "problem", label: "🔧 문제해결", desc: "고민 제시 → 원인 → 해결법, 실용 팁 중심", color: "#10b981",
-    prompt: `- "혹시 이런 고민 있으신가요?" 로 시작해서 독자의 문제를 정확히 짚기
-- 왜 이 문제가 생기는지 원인 설명
-- 구체적이고 실행 가능한 해결 방법 제시
-- "지금 당장 이것부터 하세요" 같은 액션 아이템 포함` },
-  { id: "listicle", label: "📋 리스트형", desc: "5가지 방법, 3가지 이유 등 숫자 기반 구성", color: "#f97316",
-    prompt: `- 제목에 숫자를 넣으세요: "반드시 알아야 할 5가지", "3가지 이유"
-- 각 항목을 명확하게 구분하여 소제목으로 정리
-- 각 항목마다 짧고 핵심적인 설명
-- 마지막 항목을 가장 강력한 내용으로 배치 (클라이맥스)` },
-];
-
-const PERSONAS = [
-  { id: "experience", label: "👤 경험자", desc: "직접 겪은 사람의 후기", prompt: "나는 이 주제를 직접 경험한 사람입니다. 1인칭 시점으로, 처음 알아볼 때의 막막함 → 비교 과정 → 최종 선택 → 결과까지 실제 경험담처럼 생생하게 써주세요. '처음에는 뭘 봐야 할지 몰랐는데...'처럼 시작하세요." },
-  { id: "expert", label: "🎓 전문가", desc: "업계 종사자의 분석", prompt: "나는 이 분야에서 10년 이상 근무한 전문가입니다. 업계 내부자만 아는 정보, 흔한 실수, 숨겨진 팁을 공유하는 톤으로 써주세요. '업계에서 일하다 보면...'처럼 자연스럽게 전문성을 드러내세요." },
-  { id: "parent", label: "👨‍👩‍👦 부모/가족", desc: "가족을 위해 알아보는 관점", prompt: "나는 부모님이나 가족을 위해 이 주제를 알아보는 사람입니다. 걱정과 사랑이 담긴 톤으로, '부모님이 걱정되어서 이것저것 알아봤는데...'처럼 감정적 공감을 이끌어내세요." },
-  { id: "beginner", label: "🌱 초보자", desc: "처음 알아보는 사람의 시선", prompt: "나는 이 주제에 대해 아무것도 모르는 초보자입니다. 어려운 용어를 쉽게 풀어주고, '저처럼 처음이신 분들은...'이라는 톤으로 함께 배워가는 느낌으로 써주세요." },
-  { id: "none", label: "📝 중립", desc: "페르소나 없이 객관적 서술", prompt: "" },
-];
-
-const HOOKS = [
-  { id: "question", label: "❓ 질문형", desc: "궁금증 유발", prompt: "도입부를 강렬한 질문으로 시작하세요. 독자가 '나도 궁금했어!'라고 느끼는 질문이어야 합니다. 예: '혹시 ~한 경험 있으신가요?', '왜 ~일까요?'" },
-  { id: "shock", label: "⚡ 반전형", desc: "예상 깨는 사실", prompt: "도입부에 독자의 상식을 깨는 놀라운 사실이나 통계로 시작하세요. 예: '사실 ~의 70%는 ~라는 걸 아시나요?', '대부분 ~라고 생각하지만, 실제로는...'" },
-  { id: "empathy", label: "🤝 공감형", desc: "독자의 고민에 공감", prompt: "도입부에서 독자의 현재 고민이나 상황을 정확히 짚어주세요. 예: '요즘 ~때문에 고민이 많으시죠?', '저도 처음에 ~할 때 정말 막막했어요'" },
-  { id: "story", label: "📖 이야기형", desc: "에피소드로 시작", prompt: "도입부를 짧은 에피소드나 상황 묘사로 시작하세요. 예: '지난달, ~을 하다가 깜짝 놀란 일이 있었어요', '어느 날 갑자기 ~한 전화를 받았는데...'" },
-  { id: "none", label: "✍️ 자유", desc: "AI 자율 결정", prompt: "" },
-];
-
-// ── Utils ──
-function scoreKw(total, docs) {
-  const ts = Math.max(0, 50 - Math.abs(total - 700) / 10);
-  const rs = Math.max(0, 50 - (docs / Math.max(total, 1)) / 10);
-  return Math.round((total < 300 || total > 1000 ? ts * 0.3 + rs : ts + rs) * 10) / 10;
-}
-function grade(s) {
-  if (s >= 70) return { l: "★★★", c: "#22c55e" };
-  if (s >= 50) return { l: "★★", c: "#eab308" };
-  if (s >= 30) return { l: "★", c: "#f97316" };
-  return { l: "☆", c: "#64748b" };
-}
-async function load(k, fb) { try { if (typeof window === "undefined") return fb; const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } }
-async function save(k, d) { try { if (typeof window === "undefined") return; localStorage.setItem(k, JSON.stringify(d)); } catch {} }
-
-// ── AI API Calls ──
-async function callClaude(prompt, model, apiKey) {
-  let res;
-  try {
-    res = await fetch("/api/claude", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: model || "claude-sonnet-4-6", apiKey }),
-    });
-  } catch (e) { throw new Error(`네트워크 오류 (Claude): ${e.message}`); }
-  const d = await res.json();
-  if (d.error) throw new Error(d.error);
-  return d.text || "";
-}
-
-async function callGPT(prompt, apiKey, model) {
-  let res;
-  try {
-    res = await fetch("/api/gpt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: model || "gpt-5-mini", apiKey }),
-    });
-  } catch (e) { throw new Error(`네트워크 오류 (GPT): ${e.message}`); }
-  const d = await res.json();
-  if (d.error) throw new Error(d.error);
-  return d.text || "";
-}
-
-async function callGemini(prompt, apiKey, model) {
-  let res;
-  try {
-    res = await fetch("/api/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: model || "gemini-3-flash-preview", apiKey }),
-    });
-  } catch (e) { throw new Error(`네트워크 오류 (Gemini): ${e.message}`); }
-  const d = await res.json();
-  if (d.error) throw new Error(d.error);
-  return d.text || "";
-}
-
-async function generateGeminiImage(prompt, apiKey, signal, model) {
-  const m = model || "gemini-2.0-flash-preview-image-generation";
-  let res;
-  try {
-    res = await fetch("/api/gemini-image", {
-      method: "POST", signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model: m, apiKey }),
-    });
-  } catch (e) {
-    if (e.name === "AbortError") throw e;
-    throw new Error(`🌐 네트워크 오류: ${e.message}`);
-  }
-  const d = await res.json();
-  if (d.error) throw new Error(`🔴 ${d.error}`);
-  if (!d.image) throw new Error("🖼️ 이미지가 반환되지 않았습니다");
-  return d.image;
-}
-
-const IMG_STYLES = [
-  { id: "general", label: "🖼️ 일반", prompt: "Clean, professional blog illustration, soft colors, modern design" },
-  { id: "table", label: "📊 표/설명형", prompt: "Infographic style with visual data representation, no text, icons and diagrams" },
-  { id: "compare", label: "⚖️ 비교형", prompt: "Split comparison layout, two sides showing different options, visual contrast" },
-  { id: "process", label: "🔄 프로세스", prompt: "Step by step process flow, visual journey, numbered icons without text" },
-  { id: "person", label: "👤 인물/감성", prompt: "Warm emotional scene, person in everyday life situation, cozy atmosphere" },
-  { id: "icon", label: "🎯 아이콘형", prompt: "Flat design icon illustration, minimalist, single concept, vibrant colors" },
-  { id: "photo", label: "📷 사진풍", prompt: "Photorealistic, high quality stock photo style, natural lighting" },
-  { id: "hand", label: "✏️ 손그림풍", prompt: "Hand-drawn sketch style, warm pencil illustration, friendly casual feel" },
-];
-
-const GEMINI_IMG_MODELS = [
-  { id: "gemini-2.0-flash-preview-image-generation", label: "2.0 Flash 이미지", desc: "안정적·구버전", price: "$0.039/장", priceKr: "≈₩57", speed: "⚡빠름" },
-  { id: "gemini-2.5-flash-image", label: "Nano Banana 🍌", desc: "네이티브 이미지·추천", price: "$0.039/장", priceKr: "≈₩57", speed: "⚡빠름" },
-  { id: "gemini-3-pro-image-preview", label: "Nano Banana Pro 🍌★", desc: "4K·최고화질", price: "~$0.07/장", priceKr: "≈₩100", speed: "🐢느림" },
-];
 
 // ── Naver Search Ad API ──
 // naverSignature moved to server (/api/naver)
 
-async function callNaverKeywordAPI(keywords, naverKeys) {
-  const res = await fetch("/api/naver", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      keywords: Array.isArray(keywords) ? keywords : [keywords],
-      customerId: naverKeys?.customerId,
-      apiKey: naverKeys?.apiKey,
-      secretKey: naverKeys?.secretKey,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `API ${res.status}`);
-  }
-  const data = await res.json();
-  return (data.keywordList || []).map(k => ({
-    keyword: k.relKeyword,
-    pc: k.monthlyPcQcCnt === "< 10" ? 5 : parseInt(k.monthlyPcQcCnt) || 0,
-    mobile: k.monthlyMobileQcCnt === "< 10" ? 5 : parseInt(k.monthlyMobileQcCnt) || 0,
-    total: 0, docs: 0, ratio: 0, score: 0, grade: { l: "-", c: "#64748b" },
-  })).map(k => {
-    k.total = k.pc + k.mobile;
-    return k;
-  });
-}
-
-// Track which providers actually work in this environment
-const _providerStatus = { claude: "ok", gpt: "ok", gemini: "ok" }; // Web: all available via proxy
-
-async function callAI(prompt, provider, model, keys) {
-  try {
-    let result;
-    if (provider === "claude") result = await callClaude(prompt, model, keys?.claude);
-    else if (provider === "gpt") result = await callGPT(prompt, keys.gpt, model);
-    else if (provider === "gemini") result = await callGemini(prompt, keys.gemini, model);
-    else return "지원하지 않는 AI입니다";
-    _providerStatus[provider] = "ok";
-    return result;
-  } catch (err) {
-    const msg = err.message || "";
-    _providerStatus[provider] = "error";
-    if (msg.includes("exceeded_limit") || msg.includes("rate_limit") || msg.includes("429")) return `❌ 사용량 한도 초과 (${provider}) — 잠시 후 재시도하세요.`;
-    if (msg.includes("invalid_api_key") || msg.includes("401") || msg.includes("Incorrect API")) return `❌ API 키 오류 (${provider}) — .env.local 키를 확인하세요.`;
-    if (msg.includes("insufficient_quota") || msg.includes("billing")) return `❌ 잔액 부족 (${provider}) — 결제 설정을 확인하세요.`;
-    if (msg.includes("서버에") || msg.includes("설정되지")) return `❌ ${provider} API 키가 서버에 없습니다 — .env.local에 키를 추가하세요.`;
-    if (msg.includes("404") || msg.includes("not found")) return `❌ 모델 '${model}' 없음 — 다른 모델을 선택하세요.`;
-    return `❌ ${provider} 오류: ${msg.length > 150 ? msg.substring(0, 150) + "..." : msg}`;
-  }
-}
-
-function getProviderStatus(provider, apiKeys) {
-  // Web version: all providers available via server proxy
-  // Server will return proper error if key is missing
-  if (_providerStatus[provider] === "blocked") return "blocked";
-  if (_providerStatus[provider] === "error") return "error";
-  return "ok";
-}
 
 // ── Main App ──
 export default function App() {
+  const isMobile = useIsMobile();
   const [step, setStep] = useState("keywords");
+  const [toast, setToast] = useState("");
+  const [undoStack, setUndoStack] = useState([]);
+  const [settingsTab, setSettingsTab] = useState("keys");
   const [showSettings, setShowSettings] = useState(false);
 
   // AI settings — per step
-  const defaultStepAI = { write: { provider: "gemini", model: "gemini-3-flash-preview" }, forbidden: { provider: "gemini", model: "gemini-3-flash-preview" }, images: { provider: "gemini", model: "gemini-3-flash-preview" } };
+  const defaultStepAI = DEFAULT_STEP_AI;
   const [stepAI, setStepAI] = useState(defaultStepAI);
   const [apiKeys, setApiKeys] = useState({ claude: "", gpt: "", gemini: "" });
   const [naverKeys, setNaverKeys] = useState({ customerId: "", apiKey: "", secretKey: "" });
@@ -419,6 +182,26 @@ export default function App() {
     setLoading("");
   };
 
+  // ── Undo (P0-2) ──
+  const pushUndo = () => {
+    setUndoStack(prev => [{ blog, fixedBlog, blogTitle, timestamp: Date.now() }, ...prev].slice(0, 5));
+  };
+  const popUndo = () => {
+    if (undoStack.length === 0) return;
+    const [top, ...rest] = undoStack;
+    setBlog(top.blog || "");
+    setFixedBlog(top.fixedBlog || "");
+    if (top.blogTitle) setBlogTitle(top.blogTitle);
+    setUndoStack(rest);
+    showToast("↩️ 되돌리기 완료");
+  };
+
+  // ── Toast (P1-7) ──
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
+  };
+
   // ── Keyword funcs ──
   const parseBulk = (text) => {
     const results = [];
@@ -449,27 +232,7 @@ export default function App() {
   const generateRelated = async () => {
     if (!seedKw.trim()) return;
     setLoading("연관 키워드 생성 중...");
-    const result = await callFor("write", `너는 네이버 SEO 키워드 전문가야. "${seedKw}"와 관련된 검색 키워드를 생성해.
-
-## 핵심 원칙: 짧은 키워드 우선
-- 검색어가 길수록 검색량이 줄고 키워드 가치가 떨어짐
-- 25개 이상은 반드시 1~3단어 이내 짧은 키워드로 생성
-- 한 단어 키워드를 최대한 많이 포함 (예: 실손, 치매, 간병, 암보험, 연금 등)
-
-## 규칙
-- "${seedKw}"에 단어를 덧붙이는 것(예: "${seedKw} 추천")은 최대 5개만
-- 나머지 25개는 완전히 다른 짧은 단어/표현
-- 총 30개
-
-## 좋은 예시 ("노인보험"이 입력인 경우)
-- 변형 5개: 노인보험 추천, 노인보험 비교, 노인보험 가입나이, 노인보험 보장, 노인보험료
-- 짧은 키워드 25개: 실손보험, 치매보험, 간병보험, 암보험, 효도보험, 시니어보험, 건강보험, 의료실비, 갱신형실비, 종합보험, 정기보험, 종신보험, 입원비, 수술비, 통원비, 장기요양, 노후준비, 은퇴설계, 연금보험, 상해보험, 질병보험, 60대보험, 70대보험, 부모보험, 가족보험
-
-## 나쁜 예시 (금지)
-- "노인보험 종류", "노인보험 필요성" ← 전부 "노인보험+α" 패턴
-- "노인을 위한 종합 건강보장 보험" ← 너무 긴 문장형 키워드
-
-형식: 한 줄에 키워드 하나만, 번호나 설명 없이 키워드만 출력. 총 30개.`);
+    const result = await callFor("write", buildKeywordPrompt(seedKw));
     const kResult = result.replace(/^⚠️[^\n]*\n*/i, "");
     const parsed = kResult.split("\n").map(s => s.replace(/^[\d\.\-\*\s]+/, "").trim()).filter(s => s.length > 1 && s.length < 30);
     // Always include the seed keyword itself at the top
@@ -565,32 +328,8 @@ export default function App() {
 
   // ── Forbidden funcs ──
   // Context-aware phrase replacements (금칙어 + 앞뒤 조사/어미)
-  const PHRASE_REPLACE = {
-    "가입하": "준비하", "가입을": "준비를", "가입이": "준비가", "가입할": "준비할",
-    "가입한": "준비한", "가입해": "준비해", "가입에": "준비에", "가입도": "준비도",
-    "가입 시": "준비 시", "가입하세요": "준비하시기 바랍니다", "가입하셔": "준비하셔",
-    "상담을": "문의를", "상담이": "문의가", "상담 후": "문의 후", "상담해": "문의해",
-    "상담받": "문의받", "상담을 받": "문의를 하", "상담하": "문의하",
-    "전화를": "연락을", "전화로": "연락으로", "전화해": "연락해", "전화 주": "연락 주",
-    "하세요": "하시기 바랍니다", "보세요": "보시기 바랍니다", "주세요": "주시기 바랍니다",
-    "드세요": "드시기 바랍니다", "으세요": "으시기 바랍니다",
-    "하시면": "하시게 되면", "하시는": "하시려는", "하시기": "하시려",
-    "야 합니다": "어야 합니다", "야 해요": "어야 해요", "야 할": "어야 할",
-    "고민이": "걱정이", "고민을": "걱정을", "고민하": "걱정하", "고민되": "걱정되",
-    "시기에": "시점에", "시기를": "시점을", "시기가": "시점이",
-    "확인하세요": "확인하시기 바랍니다", "알아보세요": "알아보시기 바랍니다",
-    "비하": "대비하", "대비하하": "대비하",
-  };
 
   // Simple word-level fallback
-  const COMMON_REPLACE = {
-    "가입": "준비", "세요": "습니다", "상담": "문의",
-    "하시": "하여", "전화": "연락", "고민": "걱정", "시기": "시점", "각하": "줄이",
-    "무료": "부담 없는", "추천": "안내", "비교": "살펴보기", "견적": "예상 금액",
-    "보장": "지원 범위", "해약": "중도 해지", "보험료": "월 납입금", "보험금": "지급금",
-    "약관": "계약 내용", "야 하": "어야 하", "드립니다": "겠습니다", "드려요": "겠습니다",
-    "해드": "도와", "진행": "안내", "혜택": "장점", "비하": "대비하",
-  };
 
   const addFw = (w, r = "", img = false) => {
     if (!w.trim() || forbidden.find(f => f.word === w.trim())) return;
@@ -840,112 +579,12 @@ export default function App() {
   };
 
   // ── Generation ──
-  const buildFwPrompt = () => {
-    if (!forbidden.length) return "";
-    const textFw = forbidden.filter(f => !f.isImageOnly);
-    const imgFw = forbidden.filter(f => f.isImageOnly);
-    let section = "\n\n## ⚠️ 금칙어 규칙 (반드시 준수)";
-    section += "\n아래 단어들은 네이버 블로그 저품질/제재 대상입니다. 절대 사용하지 마세요.";
-    section += "\n글자를 쪼개거나 비슷한 발음으로 바꾸는 것도 안 됩니다.";
-    section += "\n대신 의미가 통하는 다른 표현으로 우회하세요.\n";
-    if (textFw.length) {
-      section += "\n### 텍스트 금칙어 (다른 표현으로 우회):";
-      for (const f of textFw) {
-        if (f.replacement) {
-          section += `\n- "${f.word}" → "${f.replacement}" 사용`;
-        } else {
-          section += `\n- "${f.word}" → 자연스러운 다른 표현 사용`;
-        }
-      }
-    }
-    if (imgFw.length) {
-      section += "\n\n### 이미지 전용 금칙어 (텍스트 사용 금지, 이미지로만 표현):";
-      section += "\n이 단어들이 들어갈 자리에 [이미지: 설명]을 넣으세요.";
-      for (const f of imgFw) {
-        section += `\n- "${f.word}" → [이미지: ${f.word} 관련 시각 자료]`;
-      }
-    }
-    section += "\n\n※ 금칙어가 제목에 들어가면 안 됩니다!";
-    section += "\n※ 우회 예시: \"가입\" → \"준비\"/\"신청\"/\"알아보기\", \"상담\" → \"문의\"/\"안내 받기\", \"세요\" → \"~합니다\"/\"~입니다\"";
-    return section;
-  };
-
   const generateBlog = async () => {
     const mainKeyword = selectedKw?.keyword || manualKw.trim();
     if (!mainKeyword || !topic) return;
     setLoading("블로그 글 작성 중...");
-    const fwSection = buildFwPrompt();
-    const style = WRITE_STYLES.find(s => s.id === writeStyle);
-    const personaObj = PERSONAS.find(p => p.id === persona);
-    const hookObj = HOOKS.find(h => h.id === hookStyle);
-    const briefingSection = briefing.trim() ? `\n\n## 반드시 포함할 핵심 내용 (이 내용을 중심으로 글을 구성하세요)\n${briefing}` : "";
-    const personaSection = personaObj?.prompt ? `\n\n## 글쓴이 페르소나\n${personaObj.prompt}` : "";
-    const hookSection = hookObj?.prompt ? `\n\n## 도입부 전략\n${hookObj.prompt}` : "";
-    
-    const result = await callFor("write", `당신은 네이버 블로그 상위 노출 전문가입니다. 네이버 C-Rank와 D.I.A.+ 알고리즘을 완벽히 이해하고 있습니다.
-
-## 핵심 정보
-- 메인 키워드: ${mainKeyword}
-- 서브 키워드: ${subKw}
-- 주제: ${topic}
-- 타겟 독자: ${target}
-- 연락처: ${contact}
-${briefingSection}
-${personaSection}
-${hookSection}
-${fwSection}
-
-## 글쓰기 스타일: ${style?.label || "낚시형"}
-${style?.prompt || ""}
-
-## 네이버 SEO 최적화 규칙 (2025-2026 기준)
-
-### 1. 제목 (필수: 맨 위에 후보 3개 번호로)
-- 호기심 유발 + 키워드 자연 포함 (억지로 넣지 말 것)
-- 15-30자 내외, 구체적인 숫자나 연도 포함
-- 금칙어("무료","최고","최저","확실한","보장") 사용 금지
-- 예: "60대 부모님 보험, 3개월 알아보고 내린 결론" (O)
-- 예: "노인보험 추천 TOP5" (X — 너무 기계적)
-
-### 2. 도입부 (첫 3문장이 체류시간을 결정)
-- 독자가 "이건 내 이야기다"라고 느끼는 공감 포인트로 시작
-- 절대 "안녕하세요~ 오늘은 ~에 대해 알아보겠습니다" 패턴 금지
-- 첫 문장에서 감정(걱정, 궁금증, 공감)을 건드릴 것
-
-### 3. 본문 구조
-- 소제목 3-4개 (키워드 나열식 금지, 자연스러운 맥락형으로)
-  - 나쁜 예: "노인보험이란?", "노인보험 종류", "노인보험 가입방법"
-  - 좋은 예: "처음 알아보면서 가장 헷갈렸던 것", "비교해보니 이런 차이가 있었어요"
-- 각 섹션은 정보 → 개인 해석/의견 → 독자에게 적용하는 패턴
-- 중간에 "그런데 여기서 중요한 게 있는데요" 같은 전환 문장으로 계속 읽게 유도
-- 구체적인 수치, 나이, 조건 등을 포함하여 신뢰감 형성
-
-### 4. 키워드 전략 (빈도 < 맥락)
-- 메인 키워드를 문맥에 자연스럽게 녹일 것 (억지 삽입 금지)
-- 서브 키워드도 관련 맥락에서 자연스럽게 언급
-- 동의어, 유사어를 다양하게 사용 (예: 보험 → 보장, 가입 → 준비/신청)
-- 키워드 밀도보다 의미적 관련성(Semantic Relevance)이 중요
-
-### 5. CTA (글 전체의 10% 이하)
-- 마지막 단락에서만 자연스럽게 한 번
-- "~가 궁금하신 분은", "~에 대해 더 알고 싶다면" 정도로 부드럽게
-${contact ? `- 연락처: ${contact}` : "- 연락처 없이 마무리"}
-
-### 6. 태그 10-15개
-- 메인/서브 키워드 포함, 관련 롱테일 키워드 추가
-
-### 7. 분량
-- 1800-2500자 (너무 짧으면 체류시간 부족, 너무 길면 이탈)
-
-## 출력 형식
-제목 후보 3개 (번호로) → 빈 줄 → 본문 전체 → 빈 줄 → 태그
-
-## 중요: 하지 말아야 할 것
-- "안녕하세요", "오늘은 ~에 대해" 로 시작하지 마세요
-- 소제목을 키워드+명사 나열로 하지 마세요
-- 마크다운 bold(**) 남용하지 마세요 — 네이버 에디터에서 깨집니다
-- 키워드를 인위적으로 반복하지 마세요
-- "~입니다", "~합니다"만 반복하지 말고 다양한 종결어미를 사용하세요`);
+    pushUndo();
+    const result = await callFor("write", buildWritePrompt({ mainKeyword, subKw, topic, target, contact, briefing, writeStyle, persona, hookStyle, forbidden }));
     const cleanResult = result.replace(/^⚠️[^\n]*\n*/i, "");
     const titles = parseTitles(cleanResult);
     setTitleCandidates(titles);
@@ -954,37 +593,6 @@ ${contact ? `- 연락처: ${contact}` : "- 연락처 없이 마무리"}
     if (titles.length > 0) setBlogTitle(titles[0]);
     saveToHistory(titles[0] || topic, body);
     setLoading("");
-  };
-
-  // Strip AI analysis/commentary from output
-  const stripAiAnalysis = (text) => {
-    // First strip auto-fallback warning
-    let cleaned = (text || "").replace(/^⚠️\s*\S+\s*접속\s*불가\s*→\s*Claude로\s*자동\s*전환됨\s*\n*/i, "").trim();
-    const lines = cleaned.split("\n");
-    let startIdx = 0;
-    // Skip lines that look like AI analysis at the top
-    for (let i = 0; i < Math.min(lines.length, 15); i++) {
-      const l = lines[i].trim();
-      if (l.match(/^(글을\s*분석|분석\s*결과|다음|아래|수정|변경|금칙어를?\s*찾|발견|확인|처리)/)) { startIdx = i + 1; continue; }
-      if (l.match(/^\d+\.\s*\*\*["""]/) || l.match(/^\d+\.\s*["""]/) || l.match(/^[-•]\s*\*\*/)) { startIdx = i + 1; continue; }
-      if (l === "" && startIdx > 0 && startIdx === i) { startIdx = i + 1; continue; }
-      break;
-    }
-    // Also strip trailing AI commentary
-    let endIdx = lines.length;
-    for (let i = lines.length - 1; i > startIdx; i--) {
-      const l = lines[i].trim();
-      if (l.match(/^(위|이상|모든|금칙어.*제거|수정.*완료|변경.*사항)/)) { endIdx = i; continue; }
-      if (l === "" && endIdx < lines.length && endIdx === i + 1) { endIdx = i; continue; }
-      break;
-    }
-    return lines.slice(startIdx, endIdx).join("\n").trim();
-  };
-
-  // Strip auto-fallback warning from AI results
-  const stripFallback = (text) => {
-    if (!text) return text;
-    return text.replace(/^⚠️\s*\S+\s*접속\s*불가\s*→\s*Claude로\s*자동\s*전환됨\s*\n*/i, "").trim();
   };
 
   // Extract sentences containing forbidden words with surrounding context
@@ -1014,6 +622,7 @@ ${contact ? `- 연락처: ${contact}` : "- 연락처 없이 마무리"}
 
   // Sentence-level replacement: only send problematic sentences to AI, keep everything else untouched
   const rewriteAvoidFw = async () => {
+    pushUndo();
     const textToFix = fixedBlog || checkText || blog;
     if (!textToFix) return;
 
@@ -1026,12 +635,7 @@ ${contact ? `- 연락처: ${contact}` : "- 연락처 없이 마무리"}
     if (remaining.length === 0) {
       setLoading("문장 다듬는 중...");
       setAiAttempts(p => p + 1);
-      const result = await callFor("forbidden", `아래 글에서 기계적으로 단어를 치환한 부분이 있어 문장이 어색할 수 있습니다.
-자연스럽게 다듬어 주세요. 내용, 구조, 길이는 유지하고 어색한 문장만 수정하세요.
-
-중요: 분석이나 설명 없이 수정된 글만 출력하세요.
-
-${textToFix}`);
+      const result = await callFor("forbidden", buildSmoothPrompt(textToFix));
       setFixedBlog(stripAiAnalysis(result));
       setLoading("");
       return;
@@ -1074,27 +678,7 @@ ${textToFix}`);
     }).join("\n\n");
 
     try {
-      const result = await callFor("forbidden", `금칙어가 포함된 문장들을 수정해주세요.
-
-금칙어 목록: ${fwDetail}
-
-## 수정 대상 문장들
-${linePrompts}
-
-## 규칙
-- 각 ★원문의 금칙어만 다른 표현으로 바꾸세요
-- 문장 길이를 거의 동일하게 유지하세요 (±10자 이내)
-- 문장 구조, 어미, 톤을 유지하세요
-- <br> 태그, [이미지:...] 마커는 그대로 유지
-- 앞뒤 문맥에 자연스럽게 이어지도록 작성
-
-## 출력 형식 (반드시 이 형식으로만!)
-[0] 수정된 문장
-[1] 수정된 문장
-[2] 수정된 문장
-...
-
-설명이나 분석 없이 위 형식으로만 출력하세요.`);
+      const result = await callFor("forbidden", buildFwRewritePrompt({ fwDetail, linePrompts }));
 
       // Parse AI response: extract [N] lines
       const cleaned = result.replace(/^⚠️[^\n]*\n*/i, "");
@@ -1149,13 +733,7 @@ ${linePrompts}
             `[${i}] 금칙어: ${fl.words.join(", ")}\n★원문: ${fl.line}`
           ).join("\n\n");
 
-          const result2 = await callFor("forbidden", `아직 금칙어가 남았습니다. 아래 문장에서 금칙어를 반드시 제거하세요.
-
-금칙어: ${stillRemain.map(r => `"${r.word}"`).join(", ")}
-
-${retryPrompts}
-
-규칙: 금칙어 단어만 교체. 문장 길이 유지. 설명 없이 [번호] 수정문장 형식으로만 출력.`);
+          const result2 = await callFor("forbidden", buildRetryFwPrompt({ stillRemain, retryPrompts }));
 
           const cleaned2 = result2.replace(/^⚠️[^\n]*\n*/i, "");
           const reps2 = {};
@@ -1194,29 +772,7 @@ ${retryPrompts}
     }).join("\n");
 
     try {
-      const result = await callFor("images", `블로그 글에 삽입할 이미지 ${slotCount}개의 프롬프트를 JSON 배열로 만드세요.
-
-## 각 이미지별 스타일 (반드시 따르세요 — 각각 다릅니다!)
-${slotStyleGuide}
-
-## 한국어 텍스트 규칙 (매우 중요)
-- 이미지 1, 2: 반드시 한국어 텍스트/라벨/설명을 포함하세요. 블로그 글의 핵심 내용을 시각적으로 정리한 설명형 이미지로 만드세요.
-  예: 비교표, 핵심 포인트 3가지, 단계별 프로세스, 체크리스트 등 글의 세부 내용이 한국어로 적혀있는 인포그래픽
-  프롬프트에 포함할 한국어 텍스트를 구체적으로 지정하세요 (예: "등급 판정 기준", "1등급: 최중증", "2등급: 중증" 등)
-- 이미지 3 이후: 텍스트 없이 분위기/감성 위주의 비주얼 이미지
-${imgFw.length ? `\n금칙어 이미지 (필수): ${imgFw.map(f=>f.word).join(", ")} — 텍스트 없이 비주얼로 전달` : ""}
-${imgMarkers.length ? `\n본문 마커: ${imgMarkers.join(", ")}` : ""}
-${imgExtraNotes.trim() ? `\n## 추가 요청사항\n${imgExtraNotes.trim()}` : ""}
-
-글:
-${content.substring(0, 2500)}
-
-반드시 아래 JSON 형식으로만 출력. 다른 설명 금지:
-[
-  {"position":"소제목1 아래","prompt":"Detailed image prompt here. Include Korean text: '한국어 텍스트'","alt":"네이버 alt 텍스트 한글","purpose":"이미지 목적 한글","hasText":true},
-  {"position":"소제목2 아래","prompt":"Detailed prompt with Korean labels: '라벨1', '라벨2'","alt":"alt","purpose":"목적","hasText":true},
-  {"position":"소제목3 아래","prompt":"Visual-only prompt, no text in image","alt":"alt","purpose":"목적","hasText":false}
-]`);
+      const result = await callFor("images", buildImagePrompt({ slotCount, slotStyleGuide, content, imgFw, imgMarkers, imgExtraNotes }));
 
       const cleanImgResult = result.replace(/^⚠️[^\n]*\n*/i, "");
       let parsed = [];
@@ -1236,11 +792,11 @@ ${content.substring(0, 2500)}
         id: i, position: p.position || `이미지 ${i+1}`,
         prompt: p.prompt || "", alt: p.alt || "", purpose: p.purpose || "",
         hasText: p.hasText === true || i < 2, // first 2 images have text by default
-        style: preSlotStyles[i] || "general", imgModel: "gemini-3-pro-image-preview", image: null, imgLoading: false, imgError: "",
+        style: preSlotStyles[i] || "general", imgModel: "gemini-3.1-flash-image-preview", image: null, imgLoading: false, imgError: "",
       }));
       setImgSlots(slots);
     } catch (e) {
-      if (e.name !== "AbortError") setImgSlots([{ id: 0, position: "오류", prompt: e.message, alt: "", purpose: "", style: "general", imgModel: "gemini-3-pro-image-preview", image: null, imgLoading: false, imgError: "" }]);
+      if (e.name !== "AbortError") setImgSlots([{ id: 0, position: "오류", prompt: e.message, alt: "", purpose: "", style: "general", imgModel: "gemini-3.1-flash-image-preview", image: null, imgLoading: false, imgError: "" }]);
     }
     setLoading("");
   };
@@ -1251,7 +807,7 @@ ${content.substring(0, 2500)}
 
   const addSlot = () => {
     if (imgSlots.length >= 8) return;
-    setImgSlots(prev => [...prev, { id: Date.now(), position: `이미지 ${prev.length+1}`, prompt: "", alt: "", purpose: "", hasText: false, style: "general", imgModel: "gemini-3-pro-image-preview", image: null, imgLoading: false, imgError: "" }]);
+    setImgSlots(prev => [...prev, { id: Date.now(), position: `이미지 ${prev.length+1}`, prompt: "", alt: "", purpose: "", hasText: false, style: "general", imgModel: "gemini-3.1-flash-image-preview", image: null, imgLoading: false, imgError: "" }]);
   };
 
   const removeSlot = (id) => setImgSlots(prev => prev.filter(s => s.id !== id));
@@ -1377,17 +933,7 @@ ${content.substring(0, 2500)}
     setLoading(`#${slotId + 1} 프롬프트 재생성...`);
     abortRef.current = new AbortController();
     try {
-      const result = await callFor("images", `블로그 글의 "${slot.position}" 위치에 들어갈 이미지 1개의 프롬프트를 만드세요.
-스타일: ${styleInfo.label} — ${styleInfo.prompt}
-${slot.hasText ? "한국어 텍스트 포함: 블로그 글의 핵심 내용을 한국어 라벨/설명으로 포함하세요." : "텍스트 없이 비주얼만."}
-기존 프롬프트 참고 (새로 만들어야 함): ${slot.prompt}
-목적: ${slot.purpose || slot.alt || ""}
-
-글 요약:
-${content.substring(0, 1500)}
-
-JSON 형식으로만 출력:
-{"prompt":"Detailed prompt${slot.hasText ? ", include Korean text: '한국어'" : ", no text in image"}","alt":"한글 alt","purpose":"한글 목적"}`);
+      const result = await callFor("images", buildRegenPrompt({ slot, content }));
       const clean = result.replace(/^⚠️[^\n]*\n*/i, "");
       try {
         const json = JSON.parse(clean.match(/\{[\s\S]*\}/)?.[0] || "{}");
@@ -1434,14 +980,25 @@ JSON 형식으로만 출력:
   // ── Settings Panel ──
   const renderSettings = () => (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setShowSettings(false)}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 16, padding: 28, width: 480, maxHeight: "80vh", overflow: "auto", border: "1px solid rgba(0,0,0,0.1)", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1e293b" }}>⚙️ AI 설정</h2>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 16, padding: isMobile ? 16 : 28, width: isMobile ? "95vw" : 480, maxHeight: "80vh", overflow: "auto", border: "1px solid rgba(0,0,0,0.1)", boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1e293b" }}>⚙️ 설정</h2>
           <button onClick={() => setShowSettings(false)} style={{ ...btnS, fontSize: 16, padding: "4px 10px" }}>✕</button>
         </div>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "rgba(0,0,0,0.04)", borderRadius: 8, padding: 3 }}>
+          {[{id:"keys",label:"🔑 API 키"},{id:"ai",label:"🤖 AI 설정"},{id:"naver",label:"📊 네이버"}].map(t => (
+            <button key={t.id} onClick={() => setSettingsTab(t.id)} style={{
+              flex: 1, padding: "8px 12px", borderRadius: 6, border: "none", cursor: "pointer",
+              background: settingsTab === t.id ? "#fff" : "transparent",
+              color: settingsTab === t.id ? "#6366f1" : "#64748b",
+              fontWeight: settingsTab === t.id ? 700 : 500, fontSize: 13,
+              boxShadow: settingsTab === t.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+            }}>{t.label}</button>
+          ))}
+        </div>
 
-        {/* Per-step AI overview */}
-        <div style={{ marginBottom: 24 }}>
+        {settingsTab === "ai" && <div style={{ marginBottom: 24 }}>
           <label style={{ ...lbl, marginBottom: 10 }}>📍 페이지별 AI 설정</label>
           <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>각 페이지에서 직접 AI를 선택할 수 있습니다. 여기서는 현재 설정을 확인합니다.</div>
           <div style={{ fontSize: 11, color: "#22c55e", background: "rgba(34,197,94,0.06)", padding: "6px 10px", borderRadius: 6, marginBottom: 10, lineHeight: 1.5 }}>
@@ -1468,8 +1025,9 @@ JSON 형식으로만 출력:
           })}
         </div>
 
-        {/* API Keys */}
-        <div style={{ marginBottom: 20 }}>
+        }
+
+        {settingsTab === "keys" && <div style={{ marginBottom: 20 }}>
           <label style={{ ...lbl, marginBottom: 8 }}>API 키 관리</label>
           <div style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, marginBottom: 12, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)" }}>
             <span style={{ color: "#22c55e" }}>🔑 <b>BYOK</b> — Bring Your Own Key. 키는 브라우저 localStorage에만 저장됩니다.</span>
@@ -1545,8 +1103,9 @@ JSON 형식으로만 출력:
           </div>
         </div>
 
-        {/* Naver Search Ad API */}
-        <div style={{ marginBottom: 20 }}>
+        }
+
+        {settingsTab === "naver" && <div style={{ marginBottom: 20 }}>
           <label style={{ ...lbl, marginBottom: 10 }}>📊 네이버 검색광고 API (키워드 자동 조회용)</label>
           <div style={{ fontSize: 12, color: "#475569", marginBottom: 10, lineHeight: 1.5 }}>
             등록하면 키워드 검색량을 자동으로 조회합니다. 네이버 광고 계정만 있으면 무료 발급.
@@ -1567,7 +1126,7 @@ JSON 형식으로만 출력:
               />
             </div>
           ))}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 8 : 0 }}>
             <button onClick={() => setShowKeys(p => ({ ...p, naver: !p.naver }))} style={{ ...btnS, fontSize: 12 }}>
               {showKeys.naver ? "숨김" : "키 보기"}
             </button>
@@ -1576,6 +1135,8 @@ JSON 형식으로만 출력:
             </div>
           </div>
         </div>
+
+        }
 
         {/* Info */}
         <div style={{ background: "rgba(99,102,241,0.06)", borderRadius: 10, padding: 14, border: "1px solid rgba(99,102,241,0.1)" }}>
@@ -1596,10 +1157,10 @@ JSON 형식으로만 출력:
   const renderKeywords = () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "calc(100vh - 150px)", minHeight: 600 }}>
       {/* Keyword Research Area — 2 column */}
-      <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0 }}>
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 16, flex: 1, minHeight: 0 }}>
 
       {/* Left: Input & Tools */}
-      <div style={{ flex: "0 0 380px", display: "flex", flexDirection: "column", gap: 10, overflowY: "auto" }}>
+      <div style={{ flex: isMobile ? "1 1 auto" : "0 0 380px", display: "flex", flexDirection: "column", gap: 10, overflowY: "auto" }}>
 
         {/* Direct Keyword Volume Search — TOP AND PROMINENT */}
         <div style={{ ...card, border: "1px solid rgba(34,197,94,0.2)", background: "rgba(34,197,94,0.03)" }}>
@@ -1766,8 +1327,11 @@ JSON 형식으로만 출력:
                 <span style={{ fontSize: 12, color: "#475569", marginLeft: 8 }}>검색량 {selectedKw.total.toLocaleString()} · 점수 {selectedKw.score}</span>
               </div>
               <button onClick={() => {
+                setManualKw(selectedKw.keyword);
                 if (!topic.trim()) setTopic(selectedKw.keyword + " 가이드");
+                autoSuggestSubKw(selectedKw.keyword);
                 setStep("write");
+                showToast(`✅ "${selectedKw.keyword}" 메인 키워드 설정됨`);
               }} style={{ ...btn1, padding: "8px 20px", fontSize: 14 }}>다음: 글 작성 →</button>
             </div>
             {subSuggestions.length > 0 && (
@@ -1797,9 +1361,9 @@ JSON 형식으로만 출력:
     const personaObj = PERSONAS.find(p => p.id === persona);
     const hookObj = HOOKS.find(h => h.id === hookStyle);
     return (
-    <div style={{ display: "flex", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 16 }}>
       {/* Left: Settings Panel */}
-      <div style={{ flex: "0 0 380px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ flex: isMobile ? "1 1 auto" : "0 0 380px", display: "flex", flexDirection: "column", gap: 10 }}>
         {/* Briefing */}
         <div style={card}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#fb923c", marginBottom: 6 }}>📝 전달할 내용</div>
@@ -1981,6 +1545,7 @@ JSON 형식으로만 출력:
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: "#94a3b8" }}>본문</span>
             <div style={{ display: "flex", gap: 4 }}>
+              {undoStack.length > 0 && <button onClick={popUndo} style={{ ...btnS, color: "#f59e0b" }}>↩️ 되돌리기 ({undoStack.length})</button>}
               <button onClick={() => copyText(blogTitle + "\n\n" + blog)} style={{ ...btnS, color: "#6366f1" }}>전체 복사</button>
               <button onClick={() => copyText(blog)} style={btnS}>본문 복사</button>
               <button onClick={() => setStep("forbidden")} style={{ ...btnS, background: "rgba(99,102,241,0.12)", color: "#6366f1" }}>금칙어 →</button>
@@ -2135,7 +1700,7 @@ JSON 형식으로만 출력:
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
               {fixedBlog && <button onClick={() => copyText(fixedBlog)} style={{ ...btnS, fontSize: 11 }}>📋 복사</button>}
               {fixedBlog && <button onClick={() => { updateHistory(fixedBlog); setBlog(fixedBlog); setCheckText(fixedBlog); setFixedBlog(""); setDetected([]); }} style={{ ...btnS, fontSize: 11, color: "#16a34a" }}>2단계 적용</button>}
-              {fixedBlog && remainCount === 0 && <button onClick={() => setStep("images")} style={{ ...btnS, fontSize: 11, color: "#6366f1" }}>이미지 →</button>}
+              {fixedBlog && remainCount === 0 && <button onClick={() => { setStep("images"); showToast("🎨 이미지 단계로 이동"); }} style={{ ...btn1, fontSize: 12, padding: "8px 16px", background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>🎨 이미지 생성 →</button>}
             </div>
           </div>
           <textarea
@@ -2161,6 +1726,7 @@ JSON 형식으로만 출력:
                   <span key={i} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "rgba(239,68,68,0.12)", color: "#f87171", fontWeight: 600 }}>{r.word}×{r.count}</span>
                 ))}
               </div>
+              {undoStack.length > 0 && <button onClick={popUndo} style={{ ...btnS, color: "#f59e0b", marginRight: 4 }}>↩️ 되돌리기 ({undoStack.length})</button>}
               <button onClick={rewriteAvoidFw} disabled={!!loading} style={{ ...btn1, fontSize: 12, padding: "6px 14px", background: "linear-gradient(135deg, #8b5cf6, #6366f1)", flexShrink: 0 }}>
                 {loading || `${aiFor("forbidden").info.icon} AI 문맥 우회`}
               </button>
@@ -2431,7 +1997,7 @@ JSON 형식으로만 출력:
             </button>
           </div>
 
-          <div style={{ display: "flex", gap: 0, background: "rgba(0,0,0,0.05)", borderRadius: 10, padding: 3, border: "1px solid rgba(0,0,0,0.06)" }}>
+          <div style={{ display: "flex", gap: 0, background: "rgba(0,0,0,0.05)", borderRadius: 10, padding: 3, border: "1px solid rgba(0,0,0,0.06)", overflowX: isMobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
             {STEPS.map((s, idx) => {
               const isActive = step === s.id;
               const isPast = STEPS.findIndex(x => x.id === step) > idx;
@@ -2516,6 +2082,13 @@ JSON 형식으로만 출력:
         </div>
       )}
 
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", background: "rgba(30,41,59,0.95)", color: "#fff", padding: "10px 24px", borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 400, boxShadow: "0 4px 20px rgba(0,0,0,0.3)", animation: "fadeIn 0.2s" }}>
+          {toast}
+        </div>
+      )}
+
       {loading && (
         <div style={{ position: "fixed", bottom: 16, right: 16, background: "rgba(255,255,255,0.95)", borderRadius: 8, padding: "8px 16px", border: `1px solid ${currentStepAI.info.color}40`, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
           <div style={{ width: 12, height: 12, border: `2px solid ${currentStepAI.info.color}40`, borderTopColor: currentStepAI.info.color, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -2524,15 +2097,8 @@ JSON 형식으로만 출력:
         </div>
       )}
 
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}} ::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.15);border-radius:3px} ::placeholder{color:#94a3b8} textarea:focus,input:focus{outline:none;border-color:rgba(99,102,241,0.4)!important}`}</style>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}} ::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.15);border-radius:3px} ::placeholder{color:#94a3b8} textarea:focus,input:focus{outline:none;border-color:rgba(99,102,241,0.4)!important}`}</style>
     </div>
   );
 }
 
-const card = { background: "#FFFFFF", borderRadius: 12, padding: 16, border: "1px solid rgba(0,0,0,0.08)", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" };
-const inp = { width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid rgba(0,0,0,0.15)", background: "#FFFFFF", color: "#1e293b", fontSize: 14, boxSizing: "border-box", fontFamily: "inherit" };
-const lbl = { display: "block", fontSize: 12, color: "#64748b", marginBottom: 4, fontWeight: 600 };
-const cc = { padding: "7px 5px", textAlign: "center", color: "#64748b", fontSize: 13 };
-const btn1 = { padding: "10px 20px", borderRadius: 8, border: "none", cursor: "pointer", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", fontSize: 14, fontWeight: 600 };
-const btn2 = { padding: "10px 20px", borderRadius: 8, border: "1px solid rgba(0,0,0,0.15)", cursor: "pointer", background: "transparent", color: "#64748b", fontSize: 14 };
-const btnS = { padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.1)", cursor: "pointer", background: "rgba(0,0,0,0.03)", color: "#64748b", fontSize: 12 };
