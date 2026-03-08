@@ -33,14 +33,12 @@ export const AI_MODELS = {
   gemini: {
     name: "Gemini", color: "#4285f4", icon: "🔵", needsKey: true,
     models: [
-      { id: "gemini-2.0-flash", label: "2.0 Flash", price: "$0.1/$0.4", desc: "가성비·안정" },
-      { id: "gemini-2.5-flash-lite", label: "2.5 Flash Lite", price: "$0.1/$0.4", desc: "초저가" },
+      { id: "gemini-2.5-flash-lite", label: "2.5 Flash Lite", price: "$0.1/$0.4", desc: "초저가·안정" },
       { id: "gemini-2.5-flash", label: "2.5 Flash", price: "$0.15/$0.6", desc: "사고력+빠름" },
       { id: "gemini-2.5-pro", label: "2.5 Pro", price: "$1.25/$10", desc: "코딩·추론" },
       { id: "gemini-3-flash-preview", label: "3 Flash ⚡★", price: "$0.5/$3", desc: "프론티어·빠름·추천" },
       { id: "gemini-3.1-flash-lite-preview", label: "3.1 Flash Lite", price: "$0.25/$1.5", desc: "최신·초고속·저가" },
-      { id: "gemini-3-pro-preview", label: "3 Pro", price: "$2/$12", desc: "최고 추론" },
-      { id: "gemini-3.1-pro-preview", label: "3.1 Pro ★★", price: "$2/$12", desc: "최신 에이전트" },
+      { id: "gemini-3.1-pro-preview", label: "3.1 Pro ★★", price: "$2/$12", desc: "최신·에이전트·추론" },
     ],
   },
 };
@@ -90,8 +88,6 @@ export const IMG_STYLES = [
 export const GEMINI_IMG_MODELS = [
   { id: "gemini-3.1-flash-image-preview", label: "Nano Banana 2 🍌🍌", desc: "4K·Pro급 화질·빠름·추천", price: "~$0.04/장", priceKr: "≈₩58", speed: "⚡빠름" },
   { id: "gemini-3-pro-image-preview", label: "Nano Banana Pro 🍌★", desc: "4K·최고화질·정밀", price: "~$0.07/장", priceKr: "≈₩100", speed: "🐢느림" },
-  { id: "gemini-2.5-flash-image", label: "Nano Banana 🍌", desc: "네이티브 이미지·가성비", price: "$0.039/장", priceKr: "≈₩57", speed: "⚡빠름" },
-  { id: "gemini-2.0-flash-preview-image-generation", label: "2.0 Flash 이미지", desc: "안정적·구버전", price: "$0.039/장", priceKr: "≈₩57", speed: "⚡빠름" },
 ];
 
 export const PHRASE_REPLACE = {
