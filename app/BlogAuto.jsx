@@ -80,6 +80,7 @@ export default function App() {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [loading, setLoading] = useState("");
   const abortRef = useRef(null);
+  const backdropRef = useRef(null);
 
   // ── Storage ──
   useEffect(() => {
@@ -1703,12 +1704,36 @@ export default function App() {
               {fixedBlog && remainCount === 0 && <button onClick={() => { setStep("images"); showToast("🎨 이미지 단계로 이동"); }} style={{ ...btn1, fontSize: 12, padding: "8px 16px", background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>🎨 이미지 생성 →</button>}
             </div>
           </div>
-          <textarea
-            value={fixedBlog}
-            onChange={e => setFixedBlog(e.target.value)}
-            placeholder="검사 후 코드 치환 결과가 여기에 표시됩니다. 직접 수동 수정도 가능합니다."
-            style={{ ...inp, flex: 1, minHeight: 350, lineHeight: 1.8, fontSize: 14, resize: "vertical" }}
-          />
+          {(() => {
+            const fwWords = forbidden.map(f => f.word).filter(w => fixedBlog.includes(w));
+            const hasHL = fwWords.length > 0 && fixedBlog;
+            const hlText = (text) => {
+              if (!hasHL || !text) return text;
+              const pattern = new RegExp(`(${fwWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
+              return text.split(pattern).map((part, i) =>
+                fwWords.includes(part)
+                  ? <mark key={i} style={{ background: "rgba(239,68,68,0.3)", color: "transparent", borderRadius: 2, padding: "1px 0" }}>{part}</mark>
+                  : part
+              );
+            };
+            const shared = { padding: "10px 12px", lineHeight: 1.8, fontSize: 14, fontFamily: "inherit", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, boxSizing: "border-box", whiteSpace: "pre-wrap", wordWrap: "break-word", overflowWrap: "break-word" };
+            return (
+              <div style={{ position: "relative", flex: 1, minHeight: 350 }}>
+                {hasHL && (
+                  <div ref={backdropRef} style={{ ...shared, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, color: "transparent", background: "#FFFFFF", overflow: "hidden", pointerEvents: "none", zIndex: 0 }}>
+                    {hlText(fixedBlog)}
+                  </div>
+                )}
+                <textarea
+                  value={fixedBlog}
+                  onChange={e => setFixedBlog(e.target.value)}
+                  onScroll={e => { if (backdropRef.current) backdropRef.current.scrollTop = e.target.scrollTop; }}
+                  placeholder="검사 후 코드 치환 결과가 여기에 표시됩니다. 직접 수동 수정도 가능합니다."
+                  style={{ ...shared, width: "100%", minHeight: 350, resize: "vertical", background: hasHL ? "transparent" : "#FFFFFF", position: "relative", zIndex: 1, color: "#1e293b", outline: "none" }}
+                />
+              </div>
+            );
+          })()}
           {/* Total forbidden word count */}
           {fixedBlog && (
             <div style={{ marginTop: 6, padding: "6px 12px", borderRadius: 8, background: remainCount > 0 ? "rgba(239,68,68,0.06)" : "rgba(34,197,94,0.06)", border: `1px solid ${remainCount > 0 ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)"}` }}>
