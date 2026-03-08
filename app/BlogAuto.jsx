@@ -821,6 +821,17 @@ ${promptLines}
   const removeSlot = (id) => setImgSlots(prev => prev.filter(s => s.id !== id));
 
 
+  // Friendly image error messages
+  const friendlyImgError = (msg) => {
+    if (msg.includes("quota") || msg.includes("exceeded") || msg.includes("rate_limit") || msg.includes("429")) {
+      if (msg.includes("free_tier")) return "🚫 무료 할당량 초과 — Google AI Studio에서 유료 결제(Billing)를 활성화하세요. ai.google.dev/pricing";
+      return "⏳ 요청 한도 초과 — 1분 후 재시도하세요";
+    }
+    if (msg.includes("billing")) return "💳 결제 설정 필요 — Google AI Studio → 설정 → Billing 활성화";
+    if (msg.includes("not found") || msg.includes("404")) return "❌ 모델 없음 — 다른 이미지 모델을 선택하세요";
+    return msg;
+  };
+
   const genOneImage = async (slot) => {
     const key = apiKeys.gemini;
     updateSlot(slot.id, "imgLoading", true);
@@ -834,7 +845,7 @@ ${promptLines}
       updateSlot(slot.id, "image", dataUrl);
     } catch (e) {
       if (e.name === "AbortError") { updateSlot(slot.id, "imgLoading", false); return; }
-      updateSlot(slot.id, "imgError", e.message);
+      updateSlot(slot.id, "imgError", friendlyImgError(e.message));
     }
     updateSlot(slot.id, "imgLoading", false);
   };
@@ -855,7 +866,7 @@ ${promptLines}
         updateSlot(slot.id, "image", dataUrl);
       } catch (e) {
         if (e.name === "AbortError") break;
-        updateSlot(slot.id, "imgError", e.message);
+        updateSlot(slot.id, "imgError", friendlyImgError(e.message));
       }
       updateSlot(slot.id, "imgLoading", false);
     }
@@ -883,9 +894,46 @@ ${promptLines}
   };
 
   // Save all (text + images) to user-selected directory
+  // Generate Word-compatible HTML blob
+  const buildWordBlob = (title, body, images) => {
+    // Convert plain text to HTML paragraphs
+    const htmlBody = body.split("\n").map(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return "";
+      // Detect subheadings (lines that are short and look like titles)
+      if (trimmed.length < 40 && !trimmed.endsWith(".") && !trimmed.endsWith("요") && !trimmed.endsWith("다") && !trimmed.includes(",")) {
+        return `<h2 style="font-size:16pt;color:#2b2b2b;margin:18pt 0 8pt;">${trimmed}</h2>`;
+      }
+      return `<p style="font-size:11pt;line-height:1.8;margin:4pt 0;color:#333;">${trimmed}</p>`;
+    }).join("\n");
+
+    // Embed images as base64
+    const imgHtml = images.map((s, i) => 
+      `<div style="margin:16pt 0;text-align:center;">
+        <img src="${s.image}" style="max-width:100%;height:auto;border-radius:8px;" />
+        <p style="font-size:9pt;color:#888;margin-top:4pt;">${s.alt || `이미지 ${i+1}`}</p>
+      </div>`
+    ).join("\n");
+
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8"><title>${title}</title>
+<style>
+  @page { margin: 2.5cm; }
+  body { font-family: '맑은 고딕', 'Malgun Gothic', sans-serif; }
+</style></head>
+<body>
+<h1 style="font-size:20pt;color:#1a1a1a;border-bottom:2px solid #6366f1;padding-bottom:8pt;margin-bottom:16pt;">${title}</h1>
+${htmlBody}
+${imgHtml ? `<hr style="margin:24pt 0;border:none;border-top:1px solid #ddd;"/>\n<h2 style="font-size:14pt;color:#6366f1;">이미지</h2>\n${imgHtml}` : ""}
+</body></html>`;
+
+    return new Blob([html], { type: "application/msword;charset=utf-8" });
+  };
+
   const saveAllToFolder = async () => {
     const prefix = getFilePrefix();
     const textContent = fixedBlog || blog || "";
+    const title = blogTitle || "블로그 글";
     const images = imgSlots.filter(s => s.image);
 
     // Try File System Access API (Chrome/Edge)
@@ -893,15 +941,16 @@ ${promptLines}
       try {
         const dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
 
-        // Save text
+        // Save Word doc
         if (textContent) {
-          const txtFile = await dirHandle.getFileHandle(`${prefix}_본문.txt`, { create: true });
-          const writable = await txtFile.createWritable();
-          await writable.write(textContent);
+          const docBlob = buildWordBlob(title, textContent, images);
+          const docFile = await dirHandle.getFileHandle(`${prefix}_본문.doc`, { create: true });
+          const writable = await docFile.createWritable();
+          await writable.write(docBlob);
           await writable.close();
         }
 
-        // Save images
+        // Save images separately too
         for (let i = 0; i < images.length; i++) {
           const s = images[i];
           const blob = await (await fetch(s.image)).blob();
@@ -911,7 +960,7 @@ ${promptLines}
           await writable.close();
         }
 
-        alert(`✅ 저장 완료!\n📄 ${prefix}_본문.txt\n🖼️ 이미지 ${images.length}장`);
+        alert(`✅ 저장 완료!\n📄 ${prefix}_본문.doc (Word)\n🖼️ 이미지 ${images.length}장 (개별 PNG + Word 내 포함)`);
         return;
       } catch (e) {
         if (e.name === "AbortError") return;
@@ -921,10 +970,10 @@ ${promptLines}
 
     // Fallback: individual downloads
     if (textContent) {
-      const blob = new Blob([textContent], { type: "text/plain;charset=utf-8" });
+      const docBlob = buildWordBlob(title, textContent, images);
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `${prefix}_본문.txt`;
+      a.href = URL.createObjectURL(docBlob);
+      a.download = `${prefix}_본문.doc`;
       a.click();
     }
     images.forEach((s, i) => {
@@ -1728,14 +1777,14 @@ ${promptLines}
             return (
               <div style={{ position: "relative", flex: 1, minHeight: 350 }}>
                 {hasHL && (
-                  <div ref={backdropRef} style={{ ...sharedFont, ...sharedBox, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, color: "transparent", background: "#FFFFFF", overflow: "hidden", pointerEvents: "none", zIndex: 0, border: "1px solid transparent" }}>
-                    {hlText(fixedBlog)}
+                  <div ref={backdropRef} className="fw-backdrop" style={{ ...sharedFont, ...sharedBox, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, color: "transparent", background: "#FFFFFF", overflow: "auto", pointerEvents: "none", zIndex: 0, border: "1px solid transparent" }}>
+                    {hlText(fixedBlog)}{"\n"}
                   </div>
                 )}
                 <textarea
                   value={fixedBlog}
                   onChange={e => setFixedBlog(e.target.value)}
-                  onScroll={e => { if (backdropRef.current) backdropRef.current.scrollTop = e.target.scrollTop; }}
+                  onScroll={e => { if (backdropRef.current) { backdropRef.current.scrollTop = e.target.scrollTop; backdropRef.current.scrollLeft = e.target.scrollLeft; } }}
                   placeholder="검사 후 코드 치환 결과가 여기에 표시됩니다. 직접 수동 수정도 가능합니다."
                   style={{ ...sharedFont, ...sharedBox, width: "100%", height: "100%", minHeight: 350, resize: "vertical", background: hasHL ? "transparent" : "#FFFFFF", position: "relative", zIndex: 1, color: "#1e293b", outline: "none", border: "1px solid rgba(0,0,0,0.15)" }}
                 />
@@ -2130,7 +2179,7 @@ ${promptLines}
         </div>
       )}
 
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}} ::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.15);border-radius:3px} ::placeholder{color:#94a3b8} textarea:focus,input:focus{outline:none;border-color:rgba(99,102,241,0.4)!important}`}</style>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}} .fw-backdrop::-webkit-scrollbar{display:none} .fw-backdrop{-ms-overflow-style:none;scrollbar-width:none} ::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.15);border-radius:3px} ::placeholder{color:#94a3b8} textarea:focus,input:focus{outline:none;border-color:rgba(99,102,241,0.4)!important}`}</style>
     </div>
   );
 }
