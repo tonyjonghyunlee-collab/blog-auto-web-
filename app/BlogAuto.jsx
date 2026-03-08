@@ -4,7 +4,7 @@ import { STEPS, AI_MODELS, WRITE_STYLES, PERSONAS, HOOKS, IMG_STYLES, GEMINI_IMG
 import { callAI, generateGeminiImage, callNaverKeywordAPI, getProviderStatus } from "./lib/api";
 import { load, save } from "./lib/storage";
 import { scoreKw, grade, parseBulk, parseTitles, stripTitleSection, stripAiAnalysis, parseFwPaste, copyText } from "./lib/parsers";
-import { buildKeywordPrompt, buildWritePrompt, buildImagePrompt, buildRegenPrompt, buildFwRewritePrompt, buildSmoothPrompt, buildRetryFwPrompt } from "./lib/prompts";
+import { buildKeywordPrompt, buildWritePrompt, buildImagePrompt, buildRegenPrompt, buildSmoothPrompt } from "./lib/prompts";
 import { useIsMobile } from "./lib/hooks";
 
 // ── Environment Detection ──
@@ -621,138 +621,145 @@ export default function App() {
     return results;
   };
 
-  // Sentence-level replacement: only send problematic sentences to AI, keep everything else untouched
+  // Surgical word replacement: AI provides ONLY replacement words, code does the swap
   const rewriteAvoidFw = async () => {
     pushUndo();
     const textToFix = fixedBlog || checkText || blog;
     if (!textToFix) return;
 
-    let remaining = [];
+    // Find remaining forbidden words (not imageOnly)
+    const remaining = [];
     for (const fw of forbidden) {
-      const m = textToFix.match(new RegExp(fw.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"));
-      if (m) remaining.push({ word: fw.word, count: m.length, isImageOnly: fw.isImageOnly });
+      if (fw.isImageOnly) continue;
+      const re = new RegExp(fw.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+      const m = textToFix.match(re);
+      if (m) remaining.push({ word: fw.word, count: m.length });
     }
 
     if (remaining.length === 0) {
       setLoading("문장 다듬는 중...");
       setAiAttempts(p => p + 1);
       const result = await callFor("forbidden", buildSmoothPrompt(textToFix));
-      setFixedBlog(stripAiAnalysis(result));
+      const smoothed = stripAiAnalysis(result);
+      if (smoothed.length >= textToFix.length * 0.9) {
+        setFixedBlog(smoothed);
+      } else {
+        setFixedBlog(textToFix);
+        showToast("⚠️ AI가 내용을 축약해서 원본을 유지했습니다");
+      }
       setLoading("");
       return;
     }
 
-    // Find lines containing forbidden words
-    const lines = textToFix.split("\n");
-    const fwLines = []; // { lineIdx, line, words[], prevLine, nextLine }
-    for (let i = 0; i < lines.length; i++) {
-      const found = [];
-      for (const fw of forbidden) {
-        if (lines[i].includes(fw.word)) found.push(fw.word);
-      }
-      if (found.length > 0) {
-        fwLines.push({
-          lineIdx: i, line: lines[i], words: found,
-          prevLine: lines[i - 1] || "", nextLine: lines[i + 1] || "",
+    setLoading(`AI 대체어 생성 중... (${remaining.length}개 금칙어)`);
+    setAiAttempts(p => p + 1);
+
+    // Step 1: Find every occurrence of forbidden words with surrounding context
+    // Capture: word + optional trailing Korean particle (1 char like 을,이,에,할,한,해 etc.)
+    const chunks = [];
+    for (const r of remaining) {
+      const escaped = r.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`(.{0,12})(${escaped})([가-힣]{0,1})(.{0,12})`, "g");
+      let match;
+      while ((match = re.exec(textToFix)) !== null) {
+        const beforeCtx = match[1];
+        const fwWord = match[2];
+        const trailingChar = match[3]; // attached particle like 을,이,에
+        const afterCtx = match[4];
+        const chunk = fwWord + trailingChar; // "가입을", "가입이", "가입" etc.
+        const predefined = forbidden.find(f => f.word === r.word)?.replacement || "";
+        chunks.push({
+          idx: chunks.length,
+          word: r.word,
+          chunk,
+          beforeCtx: beforeCtx.trim(),
+          afterCtx: afterCtx.trim(),
+          position: match.index + beforeCtx.length,
+          length: chunk.length,
+          predefined,
         });
       }
     }
 
-    if (fwLines.length === 0) { setFixedBlog(textToFix); return; }
+    if (chunks.length === 0) { setFixedBlog(textToFix); setLoading(""); return; }
 
-    setLoading(`AI 금칙어 우회 중... (${fwLines.length}개 줄)`);
-    setAiAttempts(p => p + 1);
-    abortRef.current = new AbortController();
-
-    // Build prompt: ONLY the problematic lines, ask for replacements
-    const fwDetail = remaining.map(d => {
-      if (d.isImageOnly) return `"${d.word}" → [이미지: ${d.word}]`;
-      const rep = forbidden.find(f => f.word === d.word)?.replacement;
-      return `"${d.word}"${rep ? ` → "${rep}"` : ""}`;
-    }).join(", ");
-
-    let linePrompts = fwLines.map((fl, i) => {
-      return `[${i}] 금칙어: ${fl.words.join(", ")}
-앞줄: ${fl.prevLine.trim().substring(0, 80) || "(없음)"}
-★원문: ${fl.line}
-뒷줄: ${fl.nextLine.trim().substring(0, 80) || "(없음)"}`;
-    }).join("\n\n");
+    // Step 2: Ask AI for replacement words ONLY
+    const promptLines = chunks.map((c, i) =>
+      `[${i}] "${c.chunk}" → 문맥: ...${c.beforeCtx}【${c.chunk}】${c.afterCtx}...${c.predefined ? ` (추천: "${c.predefined}")` : ""}`
+    ).join("\n");
 
     try {
-      const result = await callFor("forbidden", buildFwRewritePrompt({ fwDetail, linePrompts }));
+      const result = await callFor("forbidden", `금칙어가 포함된 구절을 대체할 표현을 답하세요.
 
-      // Parse AI response: extract [N] lines
+## 금칙어 목록
+${remaining.map(r => {
+  const rep = forbidden.find(f => f.word === r.word)?.replacement;
+  return `"${r.word}"${rep ? ` → "${rep}"` : ""}`;
+}).join(", ")}
+
+## 대체 요청
+${promptLines}
+
+## 규칙
+- 【】 안의 구절만 대체하세요
+- 대체어는 원래 구절과 글자 수가 비슷해야 합니다 (±2자)
+- 조사(을/를, 이/가, 은/는 등)가 자연스럽게 맞아야 합니다
+- 앞뒤 문맥에 자연스럽게 이어져야 합니다
+- 대체어만 답하세요. 설명/분석/부연 금지
+
+## 출력 형식 (이 형식으로만!)
+[0] 대체어
+[1] 대체어
+...`);
+
+      // Step 3: Parse AI response - expect "[N] word" format
       const cleaned = result.replace(/^⚠️[^\n]*\n*/i, "");
-      const replacements = {};
-      const rLines = cleaned.split("\n");
-      for (const rl of rLines) {
-        const m = rl.match(/^\[(\d+)\]\s*(.+)$/);
+      const repMap = {};
+      for (const line of cleaned.split("\n")) {
+        const m = line.match(/^\[(\d+)\]\s*(.+)$/);
         if (m) {
           const idx = parseInt(m[1]);
-          const newLine = m[2].trim();
-          if (idx < fwLines.length && newLine.length > 5) {
-            replacements[fwLines[idx].lineIdx] = newLine;
+          let rep = m[2].trim().replace(/^["']|["']$/g, ""); // strip quotes
+          // Validate: replacement should be reasonable length (not a whole sentence)
+          if (idx < chunks.length && rep.length > 0 && rep.length <= chunks[idx].chunk.length + 5) {
+            repMap[idx] = rep;
           }
         }
       }
 
-      // Apply replacements to original lines
-      const newLines = [...lines];
-      for (const [lineIdx, newLine] of Object.entries(replacements)) {
-        newLines[parseInt(lineIdx)] = newLine;
-      }
-      const finalText = newLines.join("\n");
-      setFixedBlog(finalText);
+      // Step 4: Apply replacements surgically (from end to start to preserve positions)
+      let fixed = textToFix;
+      const sortedIdxs = Object.keys(repMap).map(Number).sort((a, b) =>
+        chunks[b].position - chunks[a].position
+      );
 
-      // Check if any remain
-      let stillRemain = [];
+      for (const idx of sortedIdxs) {
+        const c = chunks[idx];
+        const rep = repMap[idx];
+        fixed = fixed.substring(0, c.position) + rep + fixed.substring(c.position + c.length);
+      }
+
+      setFixedBlog(fixed);
+
+      // Step 5: Report results
+      let stillCount = 0;
+      const stillWords = [];
       for (const fw of forbidden) {
-        const m = finalText.match(new RegExp(fw.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"));
-        if (m) stillRemain.push({ word: fw.word, count: m.length });
+        if (fw.isImageOnly) continue;
+        const m = fixed.match(new RegExp(fw.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"));
+        if (m) { stillCount += m.length; stillWords.push(`${fw.word}×${m.length}`); }
       }
 
-      // Retry once more for remaining
-      if (stillRemain.length > 0) {
-        const newFwLines = [];
-        const nLines = finalText.split("\n");
-        for (let i = 0; i < nLines.length; i++) {
-          const found = [];
-          for (const fw of forbidden) {
-            if (nLines[i].includes(fw.word)) found.push(fw.word);
-          }
-          if (found.length > 0) {
-            newFwLines.push({ lineIdx: i, line: nLines[i], words: found,
-              prevLine: nLines[i - 1] || "", nextLine: nLines[i + 1] || "" });
-          }
-        }
-
-        if (newFwLines.length > 0) {
-          setLoading(`⚠️ ${stillRemain.length}개 남음 — 재시도...`);
-          setAiAttempts(p => p + 1);
-
-          const retryPrompts = newFwLines.map((fl, i) =>
-            `[${i}] 금칙어: ${fl.words.join(", ")}\n★원문: ${fl.line}`
-          ).join("\n\n");
-
-          const result2 = await callFor("forbidden", buildRetryFwPrompt({ stillRemain, retryPrompts }));
-
-          const cleaned2 = result2.replace(/^⚠️[^\n]*\n*/i, "");
-          const reps2 = {};
-          for (const rl of cleaned2.split("\n")) {
-            const m = rl.match(/^\[(\d+)\]\s*(.+)$/);
-            if (m && parseInt(m[1]) < newFwLines.length && m[2].trim().length > 5) {
-              reps2[newFwLines[parseInt(m[1])].lineIdx] = m[2].trim();
-            }
-          }
-          const finalLines = finalText.split("\n");
-          for (const [lineIdx, newLine] of Object.entries(reps2)) {
-            finalLines[parseInt(lineIdx)] = newLine;
-          }
-          setFixedBlog(finalLines.join("\n"));
-        }
+      if (stillCount > 0) {
+        showToast(`⚠️ ${stillCount}개 남음 (${stillWords.join(", ")}) — 한 번 더 실행해 보세요`);
+      } else {
+        showToast("✅ 모든 금칙어 제거 완료!");
       }
     } catch (e) {
-      if (e.name !== "AbortError") setFixedBlog(textToFix);
+      if (e.name !== "AbortError") {
+        setFixedBlog(textToFix);
+        showToast("❌ AI 오류 — 원본 유지됨");
+      }
     }
     setLoading("");
   };
@@ -1712,15 +1719,16 @@ export default function App() {
               const pattern = new RegExp(`(${fwWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
               return text.split(pattern).map((part, i) =>
                 fwWords.includes(part)
-                  ? <mark key={i} style={{ background: "rgba(239,68,68,0.3)", color: "transparent", borderRadius: 2, padding: "1px 0" }}>{part}</mark>
+                  ? <mark key={i} style={{ background: "rgba(239,68,68,0.35)", color: "transparent", borderRadius: 3 }}>{part}</mark>
                   : part
               );
             };
-            const shared = { padding: "10px 12px", lineHeight: 1.8, fontSize: 14, fontFamily: "inherit", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, boxSizing: "border-box", whiteSpace: "pre-wrap", wordWrap: "break-word", overflowWrap: "break-word" };
+            const sharedFont = { fontFamily: "'Pretendard', -apple-system, sans-serif", fontSize: 14, lineHeight: "25.2px", letterSpacing: "normal", wordSpacing: "normal" };
+            const sharedBox = { padding: "10px 12px", borderRadius: 8, boxSizing: "border-box", whiteSpace: "pre-wrap", wordWrap: "break-word", overflowWrap: "break-word", margin: 0 };
             return (
               <div style={{ position: "relative", flex: 1, minHeight: 350 }}>
                 {hasHL && (
-                  <div ref={backdropRef} style={{ ...shared, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, color: "transparent", background: "#FFFFFF", overflow: "hidden", pointerEvents: "none", zIndex: 0 }}>
+                  <div ref={backdropRef} style={{ ...sharedFont, ...sharedBox, position: "absolute", top: 0, left: 0, right: 0, bottom: 0, color: "transparent", background: "#FFFFFF", overflow: "hidden", pointerEvents: "none", zIndex: 0, border: "1px solid transparent" }}>
                     {hlText(fixedBlog)}
                   </div>
                 )}
@@ -1729,7 +1737,7 @@ export default function App() {
                   onChange={e => setFixedBlog(e.target.value)}
                   onScroll={e => { if (backdropRef.current) backdropRef.current.scrollTop = e.target.scrollTop; }}
                   placeholder="검사 후 코드 치환 결과가 여기에 표시됩니다. 직접 수동 수정도 가능합니다."
-                  style={{ ...shared, width: "100%", minHeight: 350, resize: "vertical", background: hasHL ? "transparent" : "#FFFFFF", position: "relative", zIndex: 1, color: "#1e293b", outline: "none" }}
+                  style={{ ...sharedFont, ...sharedBox, width: "100%", height: "100%", minHeight: 350, resize: "vertical", background: hasHL ? "transparent" : "#FFFFFF", position: "relative", zIndex: 1, color: "#1e293b", outline: "none", border: "1px solid rgba(0,0,0,0.15)" }}
                 />
               </div>
             );

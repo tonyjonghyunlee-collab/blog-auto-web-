@@ -1,6 +1,5 @@
 import { WRITE_STYLES, PERSONAS, HOOKS, IMG_STYLES } from "./constants";
 
-// P1-5: 키워드 20개로 축소 + 검색 의도 기반
 export function buildKeywordPrompt(seedKw) {
   return `"${seedKw}" 관련 검색 키워드 20개를 생성해.
 
@@ -16,7 +15,6 @@ export function buildKeywordPrompt(seedKw) {
 한 줄에 키워드 하나만, 번호 없이 출력. 총 20개.`;
 }
 
-// P1-4: 글쓰기 프롬프트 간결화
 export function buildWritePrompt({ mainKeyword, subKw, topic, target, contact, briefing, writeStyle, persona, hookStyle, forbidden }) {
   const style = WRITE_STYLES.find(s => s.id === writeStyle);
   const personaObj = PERSONAS.find(p => p.id === persona);
@@ -78,7 +76,6 @@ function buildFwSection(forbidden) {
   return section;
 }
 
-// P1-6: 이미지 프롬프트 현실화
 export function buildImagePrompt({ slotCount, slotStyleGuide, content, imgFw, imgMarkers, imgExtraNotes }) {
   return `블로그 글에 삽입할 이미지 ${slotCount}개의 프롬프트를 JSON 배열로 만드세요.
 
@@ -123,38 +120,61 @@ JSON으로만 출력:
 }
 
 export function buildFwRewritePrompt({ fwDetail, linePrompts }) {
-  return `금칙어가 포함된 문장들을 수정해주세요.
+  return `금칙어 단어만 교체하세요. 나머지는 한 글자도 바꾸지 마세요.
 
-금칙어: ${fwDetail}
+금칙어 목록: ${fwDetail}
 
 ## 수정 대상
 ${linePrompts}
 
-## 규칙
-- 금칙어만 다른 표현으로 교체
-- 문장 길이 ±10자 이내 유지
-- 구조/어미/톤 유지
-- <br>, [이미지:...] 마커 보존
+## 절대 규칙 (하나라도 어기면 실패)
+1. 금칙어 단어 → 대체어로 1:1 치환만 하세요
+2. 금칙어가 아닌 단어는 절대 수정/삭제/추가 금지
+3. 문장을 요약하거나 줄이지 마세요
+4. 문장을 다시 쓰지 마세요. 금칙어만 교체하세요
+5. 원문의 글자 수와 거의 같아야 합니다 (±5자 이내)
+6. <br>, [이미지:...] 마커는 절대 제거 금지
 
-## 출력 (이 형식으로만!)
+## 예시
+금칙어: "가입" → "준비"
+★원문: 보험 가입을 서두르시기 바랍니다
+[0] 보험 준비를 서두르시기 바랍니다
+(↑ "가입을"→"준비를"만 바뀜. 나머지 동일)
+
+## 출력 형식
 [0] 수정된 문장
 [1] 수정된 문장
-...`;
+...
+
+위 형식으로만 출력. 설명/분석/코멘트 절대 금지.`;
 }
 
 export function buildSmoothPrompt(text) {
-  return `아래 글에서 기계적으로 단어를 치환한 부분이 어색합니다.
-자연스럽게 다듬어 주세요. 내용/구조/길이 유지. 설명 없이 수정된 글만 출력.
+  return `아래 글에서 기계적으로 단어를 치환한 흔적이 있으면 자연스럽게 다듬어 주세요.
+
+## 절대 규칙
+1. 내용을 삭제하거나 요약하지 마세요
+2. 문장을 합치거나 줄이지 마세요
+3. 원본과 글자 수가 거의 같아야 합니다
+4. 어색한 부분의 조사/어미만 자연스럽게 수정하세요
+5. 소제목, 구조, 줄바꿈을 유지하세요
+6. 설명 없이 수정된 글만 출력하세요
 
 ${text}`;
 }
 
 export function buildRetryFwPrompt({ stillRemain, retryPrompts }) {
-  return `아직 금칙어가 남았습니다. 반드시 제거하세요.
+  return `아래 문장에 금칙어가 아직 남아있습니다.
 
 금칙어: ${stillRemain.map(r => `"${r.word}"`).join(", ")}
 
 ${retryPrompts}
 
-규칙: 금칙어만 교체. 길이 유지. [번호] 수정문장 형식으로만 출력.`;
+## 규칙
+- 금칙어 단어만 다른 표현으로 1:1 치환
+- 나머지 글자는 한 글자도 바꾸지 마세요
+- 문장을 요약/축약하지 마세요
+- 원문과 글자 수가 거의 같아야 합니다
+
+[번호] 수정된문장 형식으로만 출력. 설명 금지.`;
 }
